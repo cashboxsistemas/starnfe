@@ -1,0 +1,62 @@
+/node_modules
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+/vendor
+.env
+.env.backup
+.env.production
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+auth.json
+npm-debug.log
+yarn-error.log
+/.idea
+/.vscode
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+/storage/logs/*.log
+
+# Cache
+/bootstrap/cache/*.php
+/storage/framework/cache/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+
+# Certificates and sensitive files
+/public/certificados/*
+/public/arquivo_certificado/*
+!/public/certificados/.gitkeep
+!/public/arquivo_certificado/.gitkeep
+
+# Uploads and generated files
+/public/uploads/*
+/public/boletos_arquivos/*
+/public/nfse_doc/*
+/public/pdf/*
+/public/xml_*/*
+/public/barcode/*
+/public/contratos/*
+/public/orcamento/*
+/public/remessas/*
+/public/zips/*
+/public/sintegra_files/*
+!/public/uploads/.gitkeep
+!/public/boletos_arquivos/.gitkeep
+
+# Database
+bd.sql
+
+# Temporary files
+*.tmp
+*.temp
+
+# PHPUnit
+.phpunit.cache
+/coverage/
