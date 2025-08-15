@@ -572,9 +572,11 @@ class NFService{
 							$stdICMS->vBCSTDest = 0.00;
 							$stdICMS->vICMSSTDest = 0.00;
 
-						}else if($i->produto->CST_CSOSN == '40' || $i->produto->CST_CSOSN == '41' || $i->produto->CST_CSOSN == '51'){
+						}else if($i->produto->CST_CSOSN == '40' || $i->produto->CST_CSOSN == '41' || $i->produto->CST_CSOSN == '50' || $i->produto->CST_CSOSN == '51'){
 							$stdICMS->vICMS = 0;
 							$stdICMS->vBC = 0;
+							// Para CST 40, 41, 50, 51 não calculamos ICMS
+							$stdICMS->pICMS = 0;
 						}else{
 							$VBC += $stdProd->vProd;
 							$somaICMS += $stdICMS->vICMS;
@@ -593,7 +595,22 @@ class NFService{
 					if($i->produto->CST_CSOSN == '60'){
 						$ICMS = $nfe->tagICMSST($stdICMS);
 					}else{
-						$ICMS = $nfe->tagICMS($stdICMS);
+						// Para CSTs isentos/não tributados, garantir que os campos sejam zerados
+						$cst = $stdICMS->CST;
+						if (in_array($cst, ['40', '41', '50', '51'])) {
+							$stdICMS->vICMS = 0;
+							$stdICMS->vBC = 0;
+							$stdICMS->pICMS = 0;
+						}
+						
+						// Usar método genérico mas com campos corretos
+						try {
+							$ICMS = $nfe->tagICMS($stdICMS);
+						} catch (\Exception $e) {
+							\Log::error('Erro no tagICMS - CST: ' . $cst . ' - Erro: ' . $e->getMessage());
+							\Log::error('Dados ICMS: ' . json_encode($stdICMS));
+							throw new \Exception('Erro ao processar ICMS - CST: ' . $cst . ' - ' . $e->getMessage());
+						}
 					}
 					// regime simples
 				}else{ 
@@ -627,11 +644,26 @@ class NFService{
 						$stdICMS->pST = 0.00;
 						$stdICMS->vICMSSTRet = 0.00;
 					}
-					$stdICMS->modBC = 0;
 					
-					$stdICMS->vBC = $stdProd->vProd;
-					$stdICMS->pICMS = $this->format($i->produto->perc_icms);
-					$stdICMS->vICMS = $stdICMS->vBC * ($stdICMS->pICMS/100);
+					// Configurar campos baseado no CSOSN
+					$csosn = $venda->cliente->consumidor_final ? 
+						($config->sobrescrita_csonn_consumidor_final != "" ? 
+							$config->sobrescrita_csonn_consumidor_final : 
+							$i->produto->CST_CSOSN) : 
+						$i->produto->CST_CSOSN;
+					
+					if(in_array($csosn, ['102', '103', '300', '400'])) {
+						// CSOSN isentos - não há cálculo de ICMS
+						$stdICMS->modBC = 0;
+						$stdICMS->vBC = 0;
+						$stdICMS->pICMS = 0;
+						$stdICMS->vICMS = 0;
+					} else {
+						$stdICMS->modBC = 0;
+						$stdICMS->vBC = $stdProd->vProd;
+						$stdICMS->pICMS = $this->format($i->produto->perc_icms);
+						$stdICMS->vICMS = $stdICMS->vBC * ($stdICMS->pICMS/100);
+					}
 
 					if($tributacao->perc_ap_cred > 0 && $stdICMS->CSOSN == 101){
 						$stdICMS->pCredSN = $this->format($tributacao->perc_ap_cred);
@@ -640,7 +672,53 @@ class NFService{
 						$stdICMS->pCredSN = 0;
 						$stdICMS->vCredICMSSN = 0;
 					}
-					$ICMS = $nfe->tagICMSSN($stdICMS);
+					
+					// Usar método específico baseado no CSOSN
+					$csosn = $stdICMS->CSOSN;
+					
+					// Para CSOSNs isentos, garantir que os campos sejam zerados
+					if (in_array($csosn, ['102', '103', '300', '400'])) {
+						$stdICMS->vICMS = 0;
+						$stdICMS->vBC = 0;
+						$stdICMS->pICMS = 0;
+					}
+					
+					try {
+						switch($csosn) {
+							case '101':
+								$ICMS = $nfe->tagICMSSN101($stdICMS);
+								break;
+							case '102':
+							case '103':
+							case '300':
+							case '400':
+								$ICMS = $nfe->tagICMSSN102($stdICMS);
+								break;
+							case '201':
+								$ICMS = $nfe->tagICMSSN201($stdICMS);
+								break;
+							case '202':
+							case '203':
+								$ICMS = $nfe->tagICMSSN202($stdICMS);
+								break;
+							case '500':
+								$ICMS = $nfe->tagICMSSN500($stdICMS);
+								break;
+							case '900':
+								$ICMS = $nfe->tagICMSSN900($stdICMS);
+								break;
+							default:
+								// Se não encontrar CSOSN específico, usar 102 como fallback (isento)
+								$stdICMS->vICMS = 0;
+								$stdICMS->vBC = 0;
+								$stdICMS->pICMS = 0;
+								$ICMS = $nfe->tagICMSSN102($stdICMS);
+								break;
+						}
+					} catch (\Exception $e) {
+						\Log::error('Erro no tagICMSSN - CSOSN: ' . $csosn . ' - Erro: ' . $e->getMessage());
+						throw new \Exception('Erro ao processar ICMS SN - CSOSN: ' . $csosn . ' - ' . $e->getMessage());
+					}
 
 					$somaICMS += $stdICMS->vBC * ($stdICMS->pICMS/100);
 

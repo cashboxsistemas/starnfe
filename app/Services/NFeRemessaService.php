@@ -62,20 +62,31 @@ class NFeRemessaService
 
 	public function gerarNFe($venda)
 	{
+		\Log::info('=== INÍCIO GERAÇÃO NFE SERVICE ===');
+		\Log::info('Venda ID: ' . $venda->id);
+		\Log::info('Cliente: ' . ($venda->cliente ? $venda->cliente->razao_social : 'N/A'));
+		\Log::info('Tipo pessoa cliente: ' . ($venda->cliente ? $venda->cliente->tipo_pessoa : 'N/A'));
 
 		$config = ConfigNota::where('empresa_id', $this->empresa_id)
 			->first(); // iniciando os dados do emitente NF
+		
+		\Log::info('Config encontrada: ' . ($config ? $config->razao_social : 'N/A'));
 
 			$tributacao = Tributacao::where('empresa_id', $this->empresa_id)
 			->first(); // iniciando tributos
+		
+		\Log::info('Tributação encontrada: ' . ($tributacao ? 'Sim' : 'Não'));
 
 			$nfe = new Make();
+			\Log::info('Objeto Make criado');
+			
 			$stdInNFe = new \stdClass();
 			$stdInNFe->versao = '4.00';
 			$stdInNFe->Id = null;
 			$stdInNFe->pk_nItem = '';
 
 			$infNFe = $nfe->taginfNFe($stdInNFe);
+			\Log::info('Tag infNFe criada');
 
 			$vendaLast = $config->ultimo_numero_nfe;
 			$lastNumero = $vendaLast;
@@ -284,7 +295,13 @@ class NFeRemessaService
 			$somaApCredito = 0;
 
 			$obsIbpt = "";
+			\Log::info('=== PROCESSANDO ITENS ===');
+			\Log::info('Quantidade de itens: ' . count($venda->itens));
+			
 			foreach ($venda->itens as $i) {
+				\Log::info('--- Processando item: ' . $itemCont . ' ---');
+				\Log::info('Produto: ' . $i->produto->nome);
+				\Log::info('CST/CSOSN: ' . $i->produto->CST_CSOSN);
 
 				$p = $i;
 				$ncm = $i->produto->NCM;
@@ -520,6 +537,7 @@ class NFeRemessaService
 				// regime normal
 
 					if ($tributacao->regime == 1) {
+						\Log::info('=== REGIME NORMAL DETECTADO ===');
 
 					//$venda->produto->CST  CST
 						$percentualUf = $i->percentualUf($venda->cliente->cidade->uf);
@@ -536,23 +554,35 @@ class NFeRemessaService
 						$stdICMS->item = $itemCont;
 						$stdICMS->orig = $i->produto->origem;
 
+						// CORREÇÃO: Para regime normal, converter CSOSN para CST equivalente
+						$cstOriginal = $i->cst_csosn;
+						\Log::info('CST/CSOSN do item na remessa: ' . $cstOriginal);
+						
 						if ($venda->cliente->consumidor_final) {
 							if ($venda->cliente->cod_pais == 1058) {
 								if ($config->sobrescrita_csonn_consumidor_final != "") {
-									$stdICMS->CST = $config->sobrescrita_csonn_consumidor_final;
+									$cstParaUsar = $config->sobrescrita_csonn_consumidor_final;
+									\Log::info('Usando sobrescrita consumidor final: ' . $cstParaUsar);
 								} else {
-									$stdICMS->CST = $i->cst_csosn;
+									$cstParaUsar = $this->converterCSOSNparaCST($cstOriginal);
+									\Log::info('Convertendo CSOSN para CST (consumidor final): ' . $cstOriginal . ' → ' . $cstParaUsar);
 								}
 							} else {
-								$stdICMS->CST = $i->produto->CST_CSOSN_EXP;
+								$cstParaUsar = $i->produto->CST_CSOSN_EXP;
+								\Log::info('Usando CST exportação: ' . $cstParaUsar);
 							}
 						} else {
 							if ($venda->cliente->cod_pais == 1058) {
-								$stdICMS->CST = $i->cst_csosn;
+								$cstParaUsar = $this->converterCSOSNparaCST($cstOriginal);
+								\Log::info('Convertendo CSOSN para CST (não consumidor final): ' . $cstOriginal . ' → ' . $cstParaUsar);
 							} else {
-								$stdICMS->CST = $i->produto->CST_CSOSN_EXP;
+								$cstParaUsar = $i->produto->CST_CSOSN_EXP;
+								\Log::info('Usando CST exportação: ' . $cstParaUsar);
 							}
 						}
+						
+						$stdICMS->CST = $cstParaUsar;
+						\Log::info('CST final definido: ' . $cstParaUsar);
 						$stdICMS->modBC = 0;
 						$stdICMS->vBC = $stdProd->vProd;
 						$stdICMS->vICMS = $stdICMS->vBC * ($stdICMS->pICMS / 100);
@@ -587,9 +617,31 @@ class NFeRemessaService
 						}
 
 						if ($i->cst_csosn == '60') {
+							\Log::info('Processando ICMS ST para CST 60');
 							$ICMS = $nfe->tagICMSST($stdICMS);
 						} else {
-							$ICMS = $nfe->tagICMS($stdICMS);
+							\Log::info('Processando ICMS genérico para CST: ' . $stdICMS->CST);
+							
+							// Para CSTs isentos/não tributados, garantir que os campos sejam zerados
+							$cst = $stdICMS->CST;
+							if (in_array($cst, ['40', '41', '50', '51'])) {
+								\Log::info('CST isento detectado, zerando valores');
+								$stdICMS->vICMS = 0;
+								$stdICMS->vBC = 0;
+								$stdICMS->pICMS = 0;
+							}
+							
+							\Log::info('Dados ICMS antes do tagICMS: ' . json_encode($stdICMS));
+							
+							// Usar método específico baseado no CST mas criar objeto correto
+							try {
+								$ICMS = $this->processarICMSPorCST($nfe, $stdICMS, $cst);
+								\Log::info('ICMS processado com sucesso para CST: ' . $cst);
+							} catch (\Exception $e) {
+								\Log::error('Erro no processamento ICMS - CST: ' . $cst . ' - Erro: ' . $e->getMessage());
+								\Log::error('Dados ICMS: ' . json_encode($stdICMS));
+								throw new \Exception('Erro ao processar ICMS - CST: ' . $cst . ' - ' . $e->getMessage());
+							}
 						}
 					// regime simples
 					} else {
@@ -636,7 +688,53 @@ class NFeRemessaService
 							$stdICMS->pCredSN = 0;
 							$stdICMS->vCredICMSSN = 0;
 						}
-						$ICMS = $nfe->tagICMSSN($stdICMS);
+						
+						// Usar método específico baseado no CSOSN
+						$csosn = $stdICMS->CSOSN;
+						
+						// Para CSOSNs isentos, garantir que os campos sejam zerados
+						if (in_array($csosn, ['102', '103', '300', '400'])) {
+							$stdICMS->vICMS = 0;
+							$stdICMS->vBC = 0;
+							$stdICMS->pICMS = 0;
+						}
+						
+						try {
+							switch($csosn) {
+								case '101':
+									$ICMS = $nfe->tagICMSSN101($stdICMS);
+									break;
+								case '102':
+								case '103':
+								case '300':
+								case '400':
+									$ICMS = $nfe->tagICMSSN102($stdICMS);
+									break;
+								case '201':
+									$ICMS = $nfe->tagICMSSN201($stdICMS);
+									break;
+								case '202':
+								case '203':
+									$ICMS = $nfe->tagICMSSN202($stdICMS);
+									break;
+								case '500':
+									$ICMS = $nfe->tagICMSSN500($stdICMS);
+									break;
+								case '900':
+									$ICMS = $nfe->tagICMSSN900($stdICMS);
+									break;
+								default:
+									// Se não encontrar CSOSN específico, usar 102 como fallback (isento)
+									$stdICMS->vICMS = 0;
+									$stdICMS->vBC = 0;
+									$stdICMS->pICMS = 0;
+									$ICMS = $nfe->tagICMSSN102($stdICMS);
+									break;
+							}
+						} catch (\Exception $e) {
+							\Log::error('Erro no tagICMSSN - CSOSN: ' . $csosn . ' - Erro: ' . $e->getMessage());
+							throw new \Exception('Erro ao processar ICMS SN - CSOSN: ' . $csosn . ' - ' . $e->getMessage());
+						}
 
 						$somaICMS += $stdICMS->vBC * ($stdICMS->pICMS / 100);
 
@@ -1362,6 +1460,165 @@ class NFeRemessaService
 				'erro' => 1,
 				'error' => $e->getMessage()
 			];
+		}
+	}
+
+	/**
+	 * Converte CSOSN (Simples Nacional) para CST (Regime Normal) equivalente
+	 */
+	private function converterCSOSNparaCST($csosn)
+	{
+		$conversao = [
+			// CSOSN → CST equivalente (CSTs válidos: 00-90)
+			'101' => '00',  // Tributada pelo Simples Nacional com permissão de crédito → Tributada integralmente
+			'102' => '40',  // Tributada pelo Simples Nacional sem permissão de crédito → Isenta
+			'103' => '40',  // Isenção do ICMS no Simples Nacional → Isenta
+			'201' => '10',  // Tributada pelo Simples Nacional com permissão de crédito e com cobrança do ICMS por substituição tributária → Tributada e com cobrança do ICMS por substituição tributária
+			'202' => '30',  // Tributada pelo Simples Nacional sem permissão de crédito e com cobrança do ICMS por substituição tributária → Isenta ou não tributada e com cobrança do ICMS por substituição tributária
+			'203' => '30',  // Isenção do ICMS nos Simples Nacional e com cobrança do ICMS por substituição tributária → Isenta ou não tributada e com cobrança do ICMS por substituição tributária
+			'300' => '40',  // Imune → Isenta
+			'400' => '40',  // Não tributada pelo Simples Nacional → Isenta
+			'500' => '60',  // ICMS cobrado anteriormente por substituição tributária (substituído) ou por antecipação → ICMS cobrado anteriormente por substituição tributária
+			'900' => '90'   // Outros → Outros
+		];
+		
+		$cstConvertido = $conversao[$csosn] ?? '40'; // Default: isenta
+		\Log::info('Conversão CSOSN → CST: ' . $csosn . ' → ' . $cstConvertido);
+		
+		return $cstConvertido;
+	}
+
+	/**
+	 * Processa ICMS usando a tag específica baseada no CST
+	 */
+	private function processarICMSPorCST($nfe, $stdICMS, $cst)
+	{
+		// Criar um novo objeto específico para cada CST
+		$stdICMSEspecifico = new \stdClass();
+		
+		// Copiar propriedades básicas
+		foreach (get_object_vars($stdICMS) as $key => $value) {
+			$stdICMSEspecifico->$key = $value;
+		}
+		
+		switch($cst) {
+			case '00':
+				// ICMS tributado integralmente
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '10':
+				// Tributada e com cobrança do ICMS por substituição tributária
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				$stdICMSEspecifico->modBCST = $stdICMS->modBCST ?? 4;
+				$stdICMSEspecifico->pMVAST = $stdICMS->pMVAST ?? 0;
+				$stdICMSEspecifico->pRedBCST = $stdICMS->pRedBCST ?? 0;
+				$stdICMSEspecifico->vBCST = $stdICMS->vBCST ?? 0;
+				$stdICMSEspecifico->pICMSST = $stdICMS->pICMSST ?? 0;
+				$stdICMSEspecifico->vICMSST = $stdICMS->vICMSST ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '20':
+				// Com redução de base de cálculo
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->pRedBC = $stdICMS->pRedBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '30':
+				// Isenta ou não tributada e com cobrança do ICMS por substituição tributária
+				$stdICMSEspecifico->modBCST = $stdICMS->modBCST ?? 4;
+				$stdICMSEspecifico->pMVAST = $stdICMS->pMVAST ?? 0;
+				$stdICMSEspecifico->pRedBCST = $stdICMS->pRedBCST ?? 0;
+				$stdICMSEspecifico->vBCST = $stdICMS->vBCST ?? 0;
+				$stdICMSEspecifico->pICMSST = $stdICMS->pICMSST ?? 0;
+				$stdICMSEspecifico->vICMSST = $stdICMS->vICMSST ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '40':
+			case '41':
+			case '50':
+				// Isenta, não tributada ou diferida
+				// Para estes CSTs, devemos usar o método tagICMS() da NFePHP
+				$stdICMSEspecifico = new \stdClass();
+				$stdICMSEspecifico->item = $stdICMS->item;
+				$stdICMSEspecifico->orig = $stdICMS->orig;
+				$stdICMSEspecifico->CST = $cst;
+				
+				// Para CST 40 (isenta), incluir campos de desoneração e benefício fiscal
+				if ($cst == '40') {
+					$stdICMSEspecifico->vICMSDeson = $stdICMS->vICMSDeson ?? 0;
+					$stdICMSEspecifico->motDesICMS = $stdICMS->motDesICMS ?? 9;
+					// Código de benefício fiscal obrigatório para CST 40
+					$stdICMSEspecifico->cBenef = $stdICMS->cBenef ?? 'BR000001'; // Benefício genérico
+					\Log::info('Aplicando cBenef para CST 40: ' . $stdICMSEspecifico->cBenef);
+				}
+				
+				\Log::info('Dados ICMS completos para CST ' . $cst . ': ' . json_encode($stdICMSEspecifico));
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '51':
+				// Diferimento
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->pRedBC = $stdICMS->pRedBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMSOp = $stdICMS->vICMSOp ?? 0;
+				$stdICMSEspecifico->pDif = $stdICMS->pDif ?? 0;
+				$stdICMSEspecifico->vICMSDif = $stdICMS->vICMSDif ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '60':
+				// ICMS cobrado anteriormente por substituição tributária
+				$stdICMSEspecifico->vBCSTRet = $stdICMS->vBCSTRet ?? 0;
+				$stdICMSEspecifico->pST = $stdICMS->pST ?? 0;
+				$stdICMSEspecifico->vICMSSubstituto = $stdICMS->vICMSSubstituto ?? 0;
+				$stdICMSEspecifico->vICMSSTRet = $stdICMS->vICMSSTRet ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '70':
+				// Com redução de base de cálculo e cobrança do ICMS por substituição tributária
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->pRedBC = $stdICMS->pRedBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				$stdICMSEspecifico->modBCST = $stdICMS->modBCST ?? 4;
+				$stdICMSEspecifico->pMVAST = $stdICMS->pMVAST ?? 0;
+				$stdICMSEspecifico->pRedBCST = $stdICMS->pRedBCST ?? 0;
+				$stdICMSEspecifico->vBCST = $stdICMS->vBCST ?? 0;
+				$stdICMSEspecifico->pICMSST = $stdICMS->pICMSST ?? 0;
+				$stdICMSEspecifico->vICMSST = $stdICMS->vICMSST ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			case '90':
+				// Outras
+				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+				$stdICMSEspecifico->pRedBC = $stdICMS->pRedBC ?? 0;
+				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+				$stdICMSEspecifico->modBCST = $stdICMS->modBCST ?? 4;
+				$stdICMSEspecifico->pMVAST = $stdICMS->pMVAST ?? 0;
+				$stdICMSEspecifico->pRedBCST = $stdICMS->pRedBCST ?? 0;
+				$stdICMSEspecifico->vBCST = $stdICMS->vBCST ?? 0;
+				$stdICMSEspecifico->pICMSST = $stdICMS->pICMSST ?? 0;
+				$stdICMSEspecifico->vICMSST = $stdICMS->vICMSST ?? 0;
+				return $nfe->tagICMS($stdICMSEspecifico);
+				
+			default:
+				// Fallback: para CSTs não mapeados, usar o método genérico
+				\Log::warning('CST não mapeado: ' . $cst . '. Usando método genérico.');
+				return $nfe->tagICMS($stdICMSEspecifico);
 		}
 	}
 }

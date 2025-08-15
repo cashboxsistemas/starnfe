@@ -18,13 +18,26 @@ class NFeRemessaController extends Controller
 {
     public function transmitir(Request $request)
     {
+        \Log::info('=== INÍCIO TRANSMISSÃO NFE ===');
+        \Log::info('Request ID: ' . $request->id);
+        \Log::info('Request Empresa ID: ' . $request->empresa_id);
+        
         $venda = RemessaNfe::findOrFail($request->id);
+        \Log::info('Venda encontrada: ' . $venda->id);
+        \Log::info('Cliente venda: ' . ($venda->cliente ? $venda->cliente->razao_social : 'N/A'));
+        \Log::info('Estado emissão atual: ' . $venda->estado_emissao);
+        
         $config = ConfigNota::where('empresa_id', $request->empresa_id)
         ->first();
         if ($config == null) {
+            \Log::error('Configuração não encontrada para empresa: ' . $request->empresa_id);
             return response()->json("Configure o emitente", 401);
         }
+        
+        \Log::info('Configuração encontrada para empresa: ' . $config->razao_social);
+        
         try {
+            \Log::info('=== INICIANDO GERAÇÃO NFE ===');
             $cnpj = preg_replace('/[^0-9]/', '', $config->cnpj);
             $nfe_service = new NFeRemessaService([
                 "atualizacao" => date('Y-m-d h:i:s'),
@@ -38,12 +51,19 @@ class NFeRemessaController extends Controller
                 "CSC" => $config->csc,
                 "CSCid" => $config->csc_id
             ], $config);
+            
             if ($venda->estado_emissao == 'rejeitado' || $venda->estado_emissao == 'novo') {
+                \Log::info('Gerando NFe para venda: ' . $venda->id);
                 $nfe = $nfe_service->gerarNFe($venda);
+                
                 if (!isset($nfe['erros_xml'])) {
+                    \Log::info('XML gerado com sucesso. Chave: ' . $nfe['chave']);
 
                     $signed = $nfe_service->sign($nfe['xml']);
+                    \Log::info('XML assinado com sucesso');
+                    
                     $resultado = $nfe_service->transmitir($signed, $nfe['chave']);
+                    \Log::info('Resultado transmissão: ' . json_encode($resultado));
 
                     if ($resultado['erro'] == 0) {
                         $venda->chave = $nfe['chave'];
@@ -75,8 +95,17 @@ class NFeRemessaController extends Controller
                         $this->criarLog($venda);
                         $this->enviarEmailAutomatico($venda);
 
-                        $file = file_get_contents(public_path('xml_nfe/') . $nfe['chave'] . '.xml');
-                        importaXmlSieg($file, $venda->empresa_id);
+                        try {
+                            $xmlPath = public_path('xml_nfe/') . $nfe['chave'] . '.xml';
+                            if (file_exists($xmlPath)) {
+                                $file = file_get_contents($xmlPath);
+                                importaXmlSieg($file, $venda->empresa_id);
+                            }
+                        } catch (\Exception $e) {
+                            // Log o erro mas não interrompa o processo principal
+                            \Log::error('Erro ao importar XML para Sieg: ' . $e->getMessage());
+                        }
+                        
                         return response()->json($resultado['success'], 200);
                     } else {
                         $venda->estado_emissao = 'rejeitado';
@@ -85,11 +114,25 @@ class NFeRemessaController extends Controller
                         return response()->json($resultado['error'], 403);
                     }
                 } else {
+                    \Log::error('Erro na geração XML NFe:');
+                    \Log::error('Erros XML: ' . json_encode($nfe['erros_xml']));
                     return response()->json($nfe['erros_xml'], 401);
                 }
             }
         } catch (\Exception $e) {
-            return response()->json($e->getMessage(), 404);
+            \Log::error('=== EXCEÇÃO CAPTURADA ===');
+            \Log::error('Erro na transmissão NFe Remessa: ' . $e->getMessage());
+            \Log::error('Linha: ' . $e->getLine());
+            \Log::error('Arquivo: ' . $e->getFile());
+            \Log::error('Stack trace: ' . $e->getTraceAsString());
+            \Log::error('Request data: ' . json_encode($request->all()));
+            
+            return response()->json([
+                'erro' => true,
+                'message' => 'Erro interno: ' . $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => basename($e->getFile())
+            ], 500);
         }
     }
 

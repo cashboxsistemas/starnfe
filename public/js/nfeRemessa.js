@@ -715,14 +715,24 @@ $('.btn-pag_personalizado').click(() => {
 
 $('#btn-enviar').click(() => {
 	console.clear()
+	console.log('=== INICIANDO EMISSÃO NFE ===')
 	getChecked((id) => {
+		console.log('ID selecionado:', id)
 		$("#btn-consulta-cnpj span").removeClass("d-none");
 		let empresa_id = $("#empresa_id").val();
+		console.log('Empresa ID:', empresa_id)
+		
+		console.log('=== ENVIANDO REQUISIÇÃO ===')
+		console.log('URL:', path_url + "api/nferemessa/transmitir")
+		console.log('Dados:', {id: id, empresa_id: empresa_id})
+		
 		$.post(path_url + "api/nferemessa/transmitir", {
 			id: id,
 			empresa_id: empresa_id,
 		})
 		.done((success) => {
+			console.log('=== SUCESSO ===')
+			console.log('Resposta completa:', success)
 
 			swal("Sucesso", "NFe remessa emitida " + success, "success")
 			.then(() => {
@@ -733,16 +743,47 @@ $('#btn-enviar').click(() => {
 			})
 		})
 		.fail((err) => {
-			console.log(err)
+			console.log('=== ERRO DETECTADO ===')
+			console.log('Status do erro:', err.status)
+			console.log('Response Text:', err.responseText)
+			console.log('Response JSON:', err.responseJSON)
+			console.log('Erro completo:', err)
+			
 			try{
 				if (err.status == 403) {
 					let infProt = err.responseJSON.protNFe.infProt
+					console.log('Erro 403 - Protocolo:', infProt)
 					swal("Algo deu errado", infProt.cStat + " - " + infProt.xMotivo, "error")
 				} else {
-					swal("Algo deu errado", err.responseJSON, "error")
+					// Tratar erro 500 e outros erros adequadamente
+					let errorMessage = "Erro interno do servidor";
+					console.log('=== ANALISANDO ERRO ===')
+					
+					if (err.responseJSON) {
+						console.log('Tipo responseJSON:', typeof err.responseJSON)
+						if (typeof err.responseJSON === 'string') {
+							errorMessage = err.responseJSON;
+							console.log('Erro string:', errorMessage)
+						} else if (err.responseJSON.message) {
+							errorMessage = err.responseJSON.message;
+							console.log('Erro message:', errorMessage)
+						} else {
+							errorMessage = JSON.stringify(err.responseJSON);
+							console.log('Erro JSON stringified:', errorMessage)
+						}
+					} else if (err.responseText) {
+						errorMessage = err.responseText;
+						console.log('Erro responseText:', errorMessage)
+					}
+					
+					console.log('Mensagem final do erro:', errorMessage)
+					swal("Algo deu errado", errorMessage, "error")
 				}
-			}catch{
-				swal("Algo deu errado", err.responseJSON, "error")
+			}catch(e){
+				console.log("=== ERRO NO TRATAMENTO ===");
+				console.log("Exceção:", e);
+				console.log("Err original:", err);
+				swal("Algo deu errado", "Erro interno do servidor (Status: " + err.status + ")", "error")
 			}
 		})
 	})
