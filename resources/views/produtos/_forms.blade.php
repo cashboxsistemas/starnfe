@@ -424,7 +424,17 @@
             {!! Form::text('perc_reducao', '% Redução BC')->attrs(['class' => 'perc ignore']) !!}
         </div>
         <div class="col-md-2 mt-3">
-            {!! Form::text('cBenef', 'Cod benefício')->attrs(['class' => ''])->attrs(['class' => 'ignore']) !!}
+            {!! Form::text('cBenef', 'Código Benefício Fiscal')->attrs(['class' => 'ignore', 'placeholder' => 'Ex: SC270001']) !!}
+            <small class="text-muted">Obrigatório para CST 40, 41, 50, 51</small>
+            <small class="text-info d-block">
+                <strong>SC Principais:</strong><br>
+                SC270001 - Isenção genérica<br>
+                SC018001 - Livros/jornais<br>
+                SC018002 - Medicamentos<br>
+                SC018003 - Alimentos básicos<br>
+                SC018004 - Hortifrutícolas<br>
+                <a href="https://www.sef.sc.gov.br" target="_blank" class="text-primary">Ver tabela oficial</a>
+            </small>
         </div>
         <div class="col-md-6 mt-3">
             {!! Form::select('origem', 'Origem', App\Models\Produto::origens())->attrs(['class' => 'select2']) !!}

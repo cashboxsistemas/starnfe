@@ -320,6 +320,13 @@ class ProductController extends Controller
                 ]);
                 $prod = DB::transaction(function () use ($request) {
                     $item = Produto::create($request->all());
+                    \Log::info('=== PRODUTO CRIADO ===');
+                    \Log::info('ID: ' . $item->id);
+                    \Log::info('Nome: ' . $item->nome);
+                    \Log::info('CST_CSOSN: ' . $item->CST_CSOSN);
+                    \Log::info('cBenef: ' . ($item->cBenef ?? 'NULL'));
+                    \Log::info('Dados completos: ' . json_encode($item->toArray()));
+                    
                     if ($request->estoque_inicial > 0) {
                         Estoque::create([
                             'empresa_id' => $request->empresa_id,

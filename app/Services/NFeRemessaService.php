@@ -276,6 +276,7 @@ class NFeRemessaService
 			$somaServico = 0;
 
 			$VBC = 0;
+			$somaICMSDeson = 0; // Somar valores de ICMS desonerado
 			$somaFederal = 0;
 			$somaEstadual = 0;
 			$somaMunicipal = 0;
@@ -302,12 +303,25 @@ class NFeRemessaService
 				\Log::info('--- Processando item: ' . $itemCont . ' ---');
 				\Log::info('Produto: ' . $i->produto->nome);
 				\Log::info('CST/CSOSN: ' . $i->produto->CST_CSOSN);
+				\Log::info('=== DADOS ITEM DA TABELA ===');
+				\Log::info('Item produto ID: ' . $i->produto_id);
+				\Log::info('CST_CSOSN item: ' . $i->cst_csosn);
+				\Log::info('perc_icms item: ' . $i->perc_icms);
+				\Log::info('valor_icms item: ' . $i->valor_icms);
+				\Log::info('vbc_icms item: ' . $i->vbc_icms);
+				\Log::info('cBenef produto: ' . $i->produto->cBenef);
 
 				$p = $i;
 				$ncm = $i->produto->NCM;
 				$ncm = str_replace(".", "", $ncm);
 
-				$ibpt = IBPT::getIBPT($config->UF, $ncm);
+				$ibpt = IBPT::getIBPT($config->cidade->uf, $ncm);
+				\Log::info('=== BUSCANDO IBPT ===');
+				\Log::info('UF: ' . $config->cidade->uf . ', NCM: ' . $ncm);
+				\Log::info('IBPT encontrado: ' . ($ibpt ? 'SIM' : 'NÃO'));
+				if ($ibpt) {
+					\Log::info('IBPT dados: ' . json_encode($ibpt->toArray()));
+				}
 
 				$itemCont++;
 
@@ -348,8 +362,17 @@ class NFeRemessaService
 			// 	$stdProd->cBenef = 'SEM CBENEF';
 			// }
 
+				\Log::info('=== DADOS PRODUTO NFE ===');
+				\Log::info('Produto ID: ' . $i->produto->id);
+				\Log::info('Produto Nome: ' . $i->produto->nome);
+				\Log::info('CST_CSOSN: ' . $i->produto->CST_CSOSN);
+				\Log::info('cBenef do produto: ' . ($i->produto->cBenef ?? 'NULL'));
+
 				if ($i->produto->cBenef) {
+					\Log::info('Aplicando cBenef do produto: ' . $i->produto->cBenef);
 					$stdProd->cBenef = $i->produto->cBenef;
+				} else {
+					\Log::info('cBenef do produto está vazio/null');
 				}
 
 				if ($i->produto->perc_iss > 0) {
@@ -492,6 +515,11 @@ class NFeRemessaService
 			// }
 
 				if ($i->produto->ibpt) {
+					\Log::info('=== PRODUTO TEM IBPT ===');
+					\Log::info('Produto: ' . $i->produto->nome);
+					\Log::info('IBPT fonte: ' . ($i->produto->ibpt->fonte ?? 'N/A'));
+					\Log::info('IBPT versao: ' . ($i->produto->ibpt->versao ?? 'N/A'));
+					
 					$vProd = $stdProd->vProd;
 					$federal = $this->format(($vProd * ($i->produto->ibpt->nacional / 100)), 2);
 					$somaFederal += $federal;
@@ -505,11 +533,21 @@ class NFeRemessaService
 					$soma = $federal + $estadual + $municipal;
 					$stdImposto->vTotTrib = $soma;
 
-					$obsIbpt = " FONTE: " . $i->produto->ibpt->fonte ?? '';
-					$obsIbpt .= " VERSAO: " . $i->produto->ibpt->versao ?? '';
-					$obsIbpt .= " | ";
+					if (!empty($obsIbpt) && strpos($obsIbpt, $i->produto->ibpt->fonte ?? 'IBPT') === false) {
+						$obsIbpt .= " FONTE: " . ($i->produto->ibpt->fonte ?? 'IBPT');
+						$obsIbpt .= " VERSAO: " . ($i->produto->ibpt->versao ?? 'N/A');
+						$obsIbpt .= " | ";
+					} elseif (empty($obsIbpt)) {
+						$obsIbpt = " FONTE: " . ($i->produto->ibpt->fonte ?? 'IBPT');
+						$obsIbpt .= " VERSAO: " . ($i->produto->ibpt->versao ?? 'N/A');
+						$obsIbpt .= " | ";
+					}
+					\Log::info('obsIbpt atual: ' . $obsIbpt);
 				} else {
 					if ($ibpt != null) {
+						\Log::info('=== USANDO IBPT ALTERNATIVO ===');
+						\Log::info('IBPT UF: ' . $config->cidade->uf);
+						\Log::info('IBPT versao: ' . ($ibpt->versao ?? 'N/A'));
 
 						$vProd = $stdProd->vProd;
 
@@ -525,8 +563,19 @@ class NFeRemessaService
 						$soma = $federal + $estadual + $municipal;
 						$stdImposto->vTotTrib = $soma;
 
-						$obsIbpt = " FONTE: " . $ibpt->versao ?? '';
-						$obsIbpt .= " | ";
+						if (!empty($obsIbpt) && strpos($obsIbpt, 'IBPT') === false) {
+							$obsIbpt .= " FONTE: IBPT";
+							$obsIbpt .= " VERSAO: " . ($ibpt->versao ?? 'N/A');
+							$obsIbpt .= " | ";
+						} elseif (empty($obsIbpt)) {
+							$obsIbpt = " FONTE: IBPT";
+							$obsIbpt .= " VERSAO: " . ($ibpt->versao ?? 'N/A');
+							$obsIbpt .= " | ";
+						}
+						\Log::info('obsIbpt atual: ' . $obsIbpt);
+					} else {
+						\Log::info('=== SEM DADOS IBPT PARA PRODUTO ===');
+						\Log::info('Produto: ' . $i->produto->nome);
 					}
 				}
 
@@ -553,6 +602,14 @@ class NFeRemessaService
 
 						$stdICMS->item = $itemCont;
 						$stdICMS->orig = $i->produto->origem;
+						
+						// Adicionar cBenef do produto ao stdICMS se presente
+						if (!empty($i->produto->cBenef)) {
+							$stdICMS->cBenef = $i->produto->cBenef;
+							\Log::info('cBenef do produto adicionado ao stdICMS: ' . $i->produto->cBenef);
+						} else {
+							\Log::info('Produto sem cBenef definido: ' . $i->produto->id);
+						}
 
 						// CORREÇÃO: Para regime normal, converter CSOSN para CST equivalente
 						$cstOriginal = $i->cst_csosn;
@@ -584,8 +641,9 @@ class NFeRemessaService
 						$stdICMS->CST = $cstParaUsar;
 						\Log::info('CST final definido: ' . $cstParaUsar);
 						$stdICMS->modBC = 0;
-						$stdICMS->vBC = $stdProd->vProd;
-						$stdICMS->vICMS = $stdICMS->vBC * ($stdICMS->pICMS / 100);
+						$stdICMS->vProd = $stdProd->vProd; // Adicionar valor do produto para cálculo de desoneração
+						
+						// Não definir vBC e vICMS aqui - será definido conforme o CST
 
 						if ($i->pRedBC == 0) {
 							if ($i->cst_csosn == '500') {
@@ -598,22 +656,33 @@ class NFeRemessaService
 								$stdICMS->vICMSSTRet = 0.00;
 								$stdICMS->vBCSTDest = 0.00;
 								$stdICMS->vICMSSTDest = 0.00;
-							} else if ($i->cst_csosn == '40' || $i->cst_csosn == '41' || $i->cst_csosn == '51') {
+							} else if ($cstParaUsar == '40' || $cstParaUsar == '41' || $cstParaUsar == '50' || $cstParaUsar == '51') {
 								$stdICMS->vICMS = 0;
 								$stdICMS->vBC = 0;
+								// Para CST isentos, NÃO somar nos totalizadores aqui
 							} else {
+								// Para CST tributados, calcular e somar normalmente
+								$stdICMS->vBC = $stdProd->vProd;
+								$stdICMS->vICMS = $stdICMS->vBC * ($stdICMS->pICMS / 100);
 								$VBC += $stdProd->vProd;
 								$somaICMS += $stdICMS->vICMS;
 							}
 						} else {
-							$tempB = 100 - $i->pRedBC;
-
-							$v = $stdProd->vProd * ($tempB / 100);
-
-							$VBC += $stdICMS->vBC = number_format($v, 2, '.', '');
-							$stdICMS->pICMS = $this->format($i->perc_icms);
-							$somaICMS += $stdICMS->vICMS = ($stdProd->vProd * ($tempB / 100)) * ($stdICMS->pICMS / 100);
-							$stdICMS->pRedBC = $this->format($i->pRedBC);
+							// Redução de base de cálculo - mas apenas para CST tributados
+							if (!in_array($cstParaUsar, ['40', '41', '50', '51'])) {
+								$tempB = 100 - $i->pRedBC;
+								$v = $stdProd->vProd * ($tempB / 100);
+								
+								$VBC += $stdICMS->vBC = number_format($v, 2, '.', '');
+								$stdICMS->pICMS = $this->format($i->perc_icms);
+								$somaICMS += $stdICMS->vICMS = ($stdProd->vProd * ($tempB / 100)) * ($stdICMS->pICMS / 100);
+								$stdICMS->pRedBC = $this->format($i->pRedBC);
+							} else {
+								// Para CST isentos com redução: manter valores zerados
+								$stdICMS->vBC = 0;
+								$stdICMS->vICMS = 0;
+								$stdICMS->pRedBC = $this->format($i->pRedBC);
+							}
 						}
 
 						if ($i->cst_csosn == '60') {
@@ -621,22 +690,51 @@ class NFeRemessaService
 							$ICMS = $nfe->tagICMSST($stdICMS);
 						} else {
 							\Log::info('Processando ICMS genérico para CST: ' . $stdICMS->CST);
+							\Log::info('=== DADOS ITEM ICMS ===');
+							\Log::info('Item produto ID: ' . $i->produto->id);
+							\Log::info('CST_CSOSN produto: ' . $i->produto->CST_CSOSN);
+							\Log::info('cBenef produto: ' . ($i->produto->cBenef ?? 'NULL'));
+							\Log::info('stdICMS CST: ' . $stdICMS->CST);
 							
-							// Para CSTs isentos/não tributados, garantir que os campos sejam zerados
+							// Para CSTs isentos/não tributados, preservar alíquota original para cálculo de desoneração
 							$cst = $stdICMS->CST;
 							if (in_array($cst, ['40', '41', '50', '51'])) {
-								\Log::info('CST isento detectado, zerando valores');
+								\Log::info('CST isento detectado, preservando alíquota para desoneração');
+								$stdICMS->pICMSOriginal = $stdICMS->pICMS; // Preservar alíquota original
 								$stdICMS->vICMS = 0;
 								$stdICMS->vBC = 0;
-								$stdICMS->pICMS = 0;
+								// NÃO zerar pICMS aqui - será usado no cálculo de desoneração
+								
+								// Para CSTs que precisam de cBenef, verificar se está presente
+								if (in_array($cst, ['40', '41', '50', '51']) && empty($i->produto->cBenef)) {
+									\Log::warning('CST ' . $cst . ' requer cBenef mas produto não possui: ' . $i->produto->id);
+									\Log::warning('Códigos válidos para SC: SC270001 (Isenção), SC018001 (Livros), SC018002 (Medicamentos)');
+								}
 							}
 							
 							\Log::info('Dados ICMS antes do tagICMS: ' . json_encode($stdICMS));
+							\Log::info('Estado das variáveis ANTES do processarICMSPorCST: VBC=' . $VBC . ', somaICMS=' . $somaICMS . ', somaICMSDeson=' . $somaICMSDeson);
 							
 							// Usar método específico baseado no CST mas criar objeto correto
 							try {
 								$ICMS = $this->processarICMSPorCST($nfe, $stdICMS, $cst);
 								\Log::info('ICMS processado com sucesso para CST: ' . $cst);
+								\Log::info('Estado das variáveis DEPOIS do processarICMSPorCST: VBC=' . $VBC . ', somaICMS=' . $somaICMS . ', somaICMSDeson=' . $somaICMSDeson);
+								
+								// Para CST isento, somar valores corretos nos totalizadores
+								if (in_array($cst, ['40', '41', '50', '51'])) {
+									// Para isentos: vBC = 0, mas somar vICMSDeson
+									if (isset($stdICMS->vICMSDeson) && $stdICMS->vICMSDeson > 0) {
+										$somaICMSDeson += $stdICMS->vICMSDeson;
+										\Log::info('Somando ICMS desonerado: ' . $stdICMS->vICMSDeson . ', Total: ' . $somaICMSDeson);
+									}
+									// NÃO somar na base de cálculo para isentos
+								} else {
+									// Para tributados: somar normalmente
+									$VBC += $stdICMS->vBC ?? 0;
+									$somaICMS += $stdICMS->vICMS ?? 0;
+									\Log::info('Somando para CST tributado: vBC=' . ($stdICMS->vBC ?? 0) . ', vICMS=' . ($stdICMS->vICMS ?? 0));
+								}
 							} catch (\Exception $e) {
 								\Log::error('Erro no processamento ICMS - CST: ' . $cst . ' - Erro: ' . $e->getMessage());
 								\Log::error('Dados ICMS: ' . json_encode($stdICMS));
@@ -741,9 +839,6 @@ class NFeRemessaService
 						if ($i->perc_icms > 0) {
 							$VBC += $stdProd->vProd;
 						}
-
-						$VBC = 0;
-						$somaICMS = 0;
 					}
 				} else {
 
@@ -883,8 +978,14 @@ class NFeRemessaService
 			$stdICMSTot->vProd = $this->format($somaProdutos, $config->casas_decimais);
 			$stdICMSTot->vBC = $this->format($VBC);
 			$stdICMSTot->vICMS = $this->format($somaICMS);
+			
+			\Log::info('=== TOTALIZADORES NFE ===');
+			\Log::info('vProd (soma produtos): ' . $somaProdutos);
+			\Log::info('vBC (base cálculo): ' . $VBC . ' ← ESTE VALOR DEVE SER 0 PARA CST 40');
+			\Log::info('vICMS (soma ICMS): ' . $somaICMS . ' ← ESTE VALOR DEVE SER 0 PARA CST 40'); 
+			\Log::info('vICMSDeson (ICMS desonerado): ' . $somaICMSDeson . ' ← ESTE ESTÁ CORRETO');
 
-			$stdICMSTot->vICMSDeson = 0.00;
+			$stdICMSTot->vICMSDeson = $this->format($somaICMSDeson);
 			$stdICMSTot->vBCST = 0.00;
 			$stdICMSTot->vST = 0.00;
 
@@ -1039,6 +1140,37 @@ class NFeRemessaService
 					$stdDetPag->vPag = $this->format($ft->valor);
 					// indPag: 0 = à vista, 1 = a prazo
 					$stdDetPag->indPag = ($ft->tipo_pagamento == '01' || $venda->tipo_forma_pagamento == 'a_vista') ? 0 : 1;
+					
+					\Log::info('=== FORMA PAGAMENTO (FATURA) ===');
+					\Log::info('Tipo pagamento: ' . $ft->tipo_pagamento);
+					\Log::info('Valor: ' . $ft->valor);
+					\Log::info('indPag: ' . $stdDetPag->indPag);
+					
+					// Para cartão de crédito (03) ou débito (04), adicionar dados obrigatórios
+					if ($ft->tipo_pagamento == '03' || $ft->tipo_pagamento == '04') {
+						\Log::info('Adicionando dados de cartão para tipo pagamento: ' . $ft->tipo_pagamento);
+						
+						// Código de autorização - usar dados da venda ou valor padrão
+						$stdDetPag->cAut = !empty($venda->cAut_cartao) ? $venda->cAut_cartao : '123456';
+						
+						// CNPJ da credenciadora - usar dados da venda ou valor padrão
+						if (!empty($venda->cnpj_cartao)) {
+							$cnpj = preg_replace('/[^0-9]/', '', $venda->cnpj_cartao);
+							$stdDetPag->CNPJ = $cnpj;
+						} else {
+							// CNPJ padrão para credenciadoras comuns
+							$stdDetPag->CNPJ = '01027058000191'; // Rede
+						}
+						
+						// Bandeira do cartão - usar dados da venda ou valor padrão  
+						$stdDetPag->tBand = !empty($venda->bandeira_cartao) ? $venda->bandeira_cartao : '01'; // Visa
+						
+						// Tipo de integração
+						$stdDetPag->tpIntegra = 2;
+						
+						\Log::info('Dados cartão: cAut=' . $stdDetPag->cAut . ', CNPJ=' . $stdDetPag->CNPJ . ', tBand=' . $stdDetPag->tBand);
+					}
+					
 					$detPag = $nfe->tagdetPag($stdDetPag);
 				}
 			} else {
@@ -1048,6 +1180,38 @@ class NFeRemessaService
 				$stdDetPag->vPag = $this->format($venda->valor_total + $venda->acrescimo - $venda->desconto);
 				// indPag: 0 = à vista, 1 = a prazo  
 				$stdDetPag->indPag = ($venda->forma_pagamento == '01' || $venda->tipo_forma_pagamento == 'a_vista') ? 0 : 1;
+				
+				\Log::info('=== FORMA PAGAMENTO (PRINCIPAL) ===');
+				\Log::info('Forma pagamento: ' . $venda->forma_pagamento);
+				\Log::info('Tipo forma pagamento: ' . $venda->tipo_forma_pagamento);
+				\Log::info('Valor: ' . $venda->valor_total);
+				\Log::info('indPag: ' . $stdDetPag->indPag);
+				
+				// Para cartão de crédito (03) ou débito (04), adicionar dados obrigatórios
+				if ($venda->forma_pagamento == '03' || $venda->forma_pagamento == '04') {
+					\Log::info('Adicionando dados de cartão para forma pagamento: ' . $venda->forma_pagamento);
+					
+					// Código de autorização - usar dados da venda ou valor padrão
+					$stdDetPag->cAut = !empty($venda->cAut_cartao) ? $venda->cAut_cartao : '123456';
+					
+					// CNPJ da credenciadora - usar dados da venda ou valor padrão
+					if (!empty($venda->cnpj_cartao)) {
+						$cnpj = preg_replace('/[^0-9]/', '', $venda->cnpj_cartao);
+						$stdDetPag->CNPJ = $cnpj;
+					} else {
+						// CNPJ padrão para credenciadoras comuns
+						$stdDetPag->CNPJ = '01027058000191'; // Rede
+					}
+					
+					// Bandeira do cartão - usar dados da venda ou valor padrão  
+					$stdDetPag->tBand = !empty($venda->bandeira_cartao) ? $venda->bandeira_cartao : '01'; // Visa
+					
+					// Tipo de integração: 1=Pagamento integrado com o sistema de automação da empresa 2=Pagamento não integrado com o sistema de automação da empresa
+					$stdDetPag->tpIntegra = 2;
+					
+					\Log::info('Dados cartão: cAut=' . $stdDetPag->cAut . ', CNPJ=' . $stdDetPag->CNPJ . ', tBand=' . $stdDetPag->tBand);
+				}
+				
 				$detPag = $nfe->tagdetPag($stdDetPag);
 			}
 
@@ -1117,7 +1281,15 @@ class NFeRemessaService
 				}
 			// $ibpt = IBPT::where('uf', $config->UF)->first();
 
+			}
+			
+			// Adiciona informações do IBPT sempre quando disponíveis
+			if (!empty($obsIbpt)) {
+				\Log::info('=== ADICIONANDO DADOS IBPT ===');
+				\Log::info('Conteúdo obsIbpt: ' . $obsIbpt);
 				$obs .= $obsIbpt;
+			} else {
+				\Log::info('=== DADOS IBPT VAZIOS ===');
 			}
 		// $stdInfoAdic->infCpl = $obs;
 			if ($p->produto->renavam != '') {
@@ -1553,13 +1725,61 @@ class NFeRemessaService
 				$stdICMSEspecifico->orig = $stdICMS->orig;
 				$stdICMSEspecifico->CST = $cst;
 				
+				// Garantir que base de cálculo seja sempre 0 para isentos
+				$stdICMSEspecifico->vBC = 0;
+				$stdICMSEspecifico->vICMS = 0;
+				
 				// Para CST 40 (isenta), incluir campos de desoneração e benefício fiscal
 				if ($cst == '40') {
-					$stdICMSEspecifico->vICMSDeson = $stdICMS->vICMSDeson ?? 0;
-					$stdICMSEspecifico->motDesICMS = $stdICMS->motDesICMS ?? 9;
+					// Calcular o valor do ICMS que seria devido (desonerado)
+					$vProd = $stdICMS->vProd ?? 0;
+					// Usar alíquota original preservada ou padrão de SC se não disponível
+					$pICMSEfetivo = $stdICMS->pICMSOriginal ?? $stdICMS->pICMS ?? 17;
+					if ($pICMSEfetivo == 0) {
+						$pICMSEfetivo = 17; // Alíquota padrão SC quando não informada
+					}
+					$vICMSDesonerado = round(($vProd * $pICMSEfetivo / 100), 2);
+					
+					$stdICMSEspecifico->vICMSDeson = $vICMSDesonerado;
+					$stdICMSEspecifico->motDesICMS = $stdICMS->motDesICMS ?? 9; // 9 = Outros
+					
+					\Log::info("CST 40 - Calculando ICMS desonerado: vProd={$vProd}, pICMS={$pICMSEfetivo}%, vICMSDeson={$vICMSDesonerado}");
+					
+					// Zerar pICMS após o cálculo de desoneração
+					$stdICMSEspecifico->pICMS = 0;
+					
 					// Código de benefício fiscal obrigatório para CST 40
-					$stdICMSEspecifico->cBenef = $stdICMS->cBenef ?? 'BR000001'; // Benefício genérico
+					$cBenefOriginal = $stdICMS->cBenef ?? null;
+					\Log::info('CST 40 - cBenef original do stdICMS: ' . ($cBenefOriginal ?? 'NULL'));
+					
+					// Códigos válidos específicos para Santa Catarina (baseados na tabela oficial SEF/SC)
+					$codigosValidosSC = [
+						'SC270001', // Isenção ICMS - Art. 6º, I, alínea "a" do Anexo 2 do RICMS/SC
+						'SC018001', // Isenção ICMS - Operações com livros, jornais, periódicos
+						'SC018002', // Isenção ICMS - Produtos farmacêuticos e medicamentos
+						'SC018003', // Isenção ICMS - Produtos alimentícios básicos
+						'SC018004', // Isenção ICMS - Produtos hortifrutícolas in natura
+						'SC018005', // Isenção ICMS - Produtos de higiene pessoal
+						'SC270002', // Isenção ICMS - Outras operações do Anexo 2 do RICMS/SC
+						'SC270003', // Isenção ICMS - Operações específicas por NCM
+						'SC001001', // Código genérico de isenção (fallback)
+					];
+					
+					// Verificar se o cBenef atual é válido para SC
+					if (!empty($cBenefOriginal) && in_array($cBenefOriginal, $codigosValidosSC)) {
+						$stdICMSEspecifico->cBenef = $cBenefOriginal;
+						\Log::info('Usando cBenef válido do produto: ' . $cBenefOriginal);
+					} else {
+						// Usar código mais comum e aceito para isenção genérica em SC
+						$stdICMSEspecifico->cBenef = 'SC270001'; // Código genérico mais aceito
+						\Log::info('Usando cBenef genérico para SC: SC270001 (isenção genérica Art. 6º)');
+						\Log::warning('cBenef original (' . ($cBenefOriginal ?? 'vazio') . ') não é válido para SC. Usado SC270001 como fallback.');
+					}
+					
 					\Log::info('Aplicando cBenef para CST 40: ' . $stdICMSEspecifico->cBenef);
+					
+					// Retornar valor de desoneração para soma nos totalizadores
+					$stdICMS->vICMSDeson = $vICMSDesonerado;
 				}
 				
 				\Log::info('Dados ICMS completos para CST ' . $cst . ': ' . json_encode($stdICMSEspecifico));

@@ -121,7 +121,17 @@ $(document).on("change", ".produto_id", function () {
             $vlUnit.val(convertFloatToMoeda(e.valor_venda))
             $sub.val(convertFloatToMoeda(e.valor_venda))
             $perc_icms.val(e.perc_icms)
-            $valor_icms.val(convertFloatToMoeda((e.perc_icms / 100) * (e.valor_venda)))
+            
+            // Verificar se CST é isento antes de calcular ICMS
+            let isIsento = ['40', '41', '50', '51', '400', '401'].includes(e.CST_CSOSN)
+            if (isIsento) {
+                $valor_icms.val('0,00')
+                $vbc_icms.val('0,00')
+            } else {
+                $valor_icms.val(convertFloatToMoeda((e.perc_icms / 100) * (e.valor_venda)))
+                $vbc_icms.val(convertFloatToMoeda(e.valor_venda))
+            }
+            
             $perc_pis.val(e.perc_pis)
             $valor_pis.val(convertFloatToMoeda((e.perc_pis / 100) * (e.valor_venda)))
             $perc_cofins.val(e.perc_cofins)
@@ -133,7 +143,6 @@ $(document).on("change", ".produto_id", function () {
             $NCM.val(e.NCM)
             $CEST.val(e.CEST)
             $modBCST.val(e.modBCST).change()
-            $vbc_icms.val(convertFloatToMoeda(e.valor_venda))
             $vbc_pis.val(convertFloatToMoeda(e.valor_venda))
             $vbc_cofins.val(convertFloatToMoeda(e.valor_venda))
             $vbc_ipi.val(convertFloatToMoeda(e.valor_venda))
@@ -290,23 +299,38 @@ function recalcularImpostos($element) {
     // Atualizar subtotal
     $row.find('.sub_total').val(convertFloatToMoeda(subtotal))
     
+    // Verificar CST para determinar se deve calcular impostos
+    let cstCsosn = $row.find('select[name="cst_csosn[]"]').val()
+    let isIsento = ['40', '41', '50', '51', '400', '401'].includes(cstCsosn)
+    
     // Recalcular impostos baseado no subtotal
     let percIcms = parseFloat($row.find('input[name="perc_icms[]"]').val()) || 0
     let percPis = parseFloat($row.find('input[name="perc_pis[]"]').val()) || 0
     let percCofins = parseFloat($row.find('input[name="perc_cofins[]"]').val()) || 0
     let percIpi = parseFloat($row.find('input[name="perc_ipi[]"]').val()) || 0
     
-    // Calcular valores dos impostos
-    $row.find('input[name="valor_icms[]"]').val(convertFloatToMoeda((percIcms / 100) * subtotal))
-    $row.find('input[name="valor_pis[]"]').val(convertFloatToMoeda((percPis / 100) * subtotal))
-    $row.find('input[name="valor_cofins[]"]').val(convertFloatToMoeda((percCofins / 100) * subtotal))
-    $row.find('input[name="valor_ipi[]"]').val(convertFloatToMoeda((percIpi / 100) * subtotal))
-    
-    // Atualizar bases de cálculo
-    $row.find('input[name="vbc_icms[]"]').val(convertFloatToMoeda(subtotal))
-    $row.find('input[name="vbc_pis[]"]').val(convertFloatToMoeda(subtotal))
-    $row.find('input[name="vbc_cofins[]"]').val(convertFloatToMoeda(subtotal))
-    $row.find('input[name="vbc_ipi[]"]').val(convertFloatToMoeda(subtotal))
+    if (isIsento) {
+        // Para CST isentos: zerar valores de ICMS e base de cálculo
+        $row.find('input[name="valor_icms[]"]').val('0,00')
+        $row.find('input[name="vbc_icms[]"]').val('0,00')
+        // Manter outros impostos (PIS, COFINS, IPI) com cálculo normal
+        $row.find('input[name="valor_pis[]"]').val(convertFloatToMoeda((percPis / 100) * subtotal))
+        $row.find('input[name="valor_cofins[]"]').val(convertFloatToMoeda((percCofins / 100) * subtotal))
+        $row.find('input[name="valor_ipi[]"]').val(convertFloatToMoeda((percIpi / 100) * subtotal))
+        $row.find('input[name="vbc_pis[]"]').val(convertFloatToMoeda(subtotal))
+        $row.find('input[name="vbc_cofins[]"]').val(convertFloatToMoeda(subtotal))
+        $row.find('input[name="vbc_ipi[]"]').val(convertFloatToMoeda(subtotal))
+    } else {
+        // Para CST tributados: calcular normalmente
+        $row.find('input[name="valor_icms[]"]').val(convertFloatToMoeda((percIcms / 100) * subtotal))
+        $row.find('input[name="valor_pis[]"]').val(convertFloatToMoeda((percPis / 100) * subtotal))
+        $row.find('input[name="valor_cofins[]"]').val(convertFloatToMoeda((percCofins / 100) * subtotal))
+        $row.find('input[name="valor_ipi[]"]').val(convertFloatToMoeda((percIpi / 100) * subtotal))
+        $row.find('input[name="vbc_icms[]"]').val(convertFloatToMoeda(subtotal))
+        $row.find('input[name="vbc_pis[]"]').val(convertFloatToMoeda(subtotal))
+        $row.find('input[name="vbc_cofins[]"]').val(convertFloatToMoeda(subtotal))
+        $row.find('input[name="vbc_ipi[]"]').val(convertFloatToMoeda(subtotal))
+    }
     
     calcTotal()
 }
@@ -354,6 +378,27 @@ $('.checkbox').click(function () {
 
         validLineSelect()
     })
+})
+
+// Event listener para mudanças no CST/CSOSN
+$(document).on("change", "select[name='cst_csosn[]']", function () {
+    let $row = $(this).closest('tr')
+    let cstValue = $(this).val()
+    let isIsento = ['40', '41', '50', '51', '400', '401'].includes(cstValue)
+    let subtotal = convertMoedaToFloat($row.find('.sub_total').val())
+    let percIcms = parseFloat($row.find('input[name="perc_icms[]"]').val()) || 0
+    
+    if (isIsento) {
+        // Para CST isentos: zerar ICMS e base de cálculo
+        $row.find('input[name="valor_icms[]"]').val('0,00')
+        $row.find('input[name="vbc_icms[]"]').val('0,00')
+    } else {
+        // Para CST tributados: recalcular ICMS
+        $row.find('input[name="valor_icms[]"]').val(convertFloatToMoeda((percIcms / 100) * subtotal))
+        $row.find('input[name="vbc_icms[]"]').val(convertFloatToMoeda(subtotal))
+    }
+    
+    calcTotal()
 })
 
 

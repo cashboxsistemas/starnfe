@@ -20,6 +20,11 @@ class ItemVenda extends Model
         return $this->belongsTo(Venda::class, 'venda_id');
     }
     
+    // Accessor para valor_unitario (mapeia para campo valor)
+    public function getValorUnitarioAttribute(){
+        return $this->valor;
+    }
+    
     public function percentualUf($uf){
         $tributacao = TributacaoUf
         ::where('uf', $uf)
