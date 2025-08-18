@@ -13,6 +13,11 @@ class Plano extends Model
 		'visivel', 'maximo_usuario_simultaneo', 'armazenamento', 'api_sieg'
 	];
 
+	public function perfil()
+	{
+		return $this->belongsTo(PerfilAcesso::class, 'perfil_id');
+	}
+
 
 	public static function backgroundArmazenamento($perc){
 		if($perc <= 65){
