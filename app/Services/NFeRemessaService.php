@@ -698,6 +698,16 @@ class NFeRemessaService
 							
 							// Para CSTs isentos/não tributados, preservar alíquota original para cálculo de desoneração
 							$cst = $stdICMS->CST;
+							\Log::info('CST obtido do stdICMS: ' . $cst);
+							\Log::info('cstParaUsar era: ' . $cstParaUsar);
+							
+							// VERIFICAÇÃO DE SEGURANÇA: Garantir que estamos usando o CST convertido
+							if ($cst != $cstParaUsar) {
+								\Log::warning('INCONSISTÊNCIA: CST do stdICMS (' . $cst . ') diferente do cstParaUsar (' . $cstParaUsar . '). Corrigindo...');
+								$cst = $cstParaUsar;
+								$stdICMS->CST = $cstParaUsar;
+							}
+							
 							if (in_array($cst, ['40', '41', '50', '51'])) {
 								\Log::info('CST isento detectado, preservando alíquota para desoneração');
 								$stdICMS->pICMSOriginal = $stdICMS->pICMS; // Preservar alíquota original
@@ -717,7 +727,41 @@ class NFeRemessaService
 							
 							// Usar método específico baseado no CST mas criar objeto correto
 							try {
+								// VALIDAÇÃO ANTES DO PROCESSAMENTO
+								\Log::info('=== VALIDAÇÃO PRÉ-PROCESSAMENTO ICMS ===');
+								\Log::info('CST para usar: ' . $cst);
+								\Log::info('stdICMS original: ' . json_encode($stdICMS));
+								
+								// Validar CST
+								if (empty($cst) || !in_array($cst, ['00', '10', '20', '30', '40', '41', '50', '51', '60', '70', '90'])) {
+									\Log::error('CST inválido ou vazio: ' . ($cst ?? 'NULL'));
+									throw new \Exception('CST inválido para regime normal: ' . ($cst ?? 'NULL'));
+								}
+								
+								// Validar campos obrigatórios básicos
+								if (!isset($stdICMS->item)) {
+									\Log::error('Campo item não definido no stdICMS');
+									throw new \Exception('Campo item obrigatório não definido');
+								}
+								
+								if (!isset($stdICMS->orig)) {
+									\Log::error('Campo orig não definido no stdICMS');
+									throw new \Exception('Campo origem obrigatório não definido');
+								}
+								
+								// Para CSTs que precisam de cBenef
+								if (in_array($cst, ['40', '41', '50']) && empty($i->produto->cBenef)) {
+									\Log::warning('CST ' . $cst . ' recomenda cBenef mas produto não possui: ' . $i->produto->id);
+									// Não falhar, apenas alertar
+								}
+								
 								$ICMS = $this->processarICMSPorCST($nfe, $stdICMS, $cst);
+								
+								if ($ICMS === null || $ICMS === false) {
+									\Log::error('processarICMSPorCST retornou valor inválido');
+									throw new \Exception('Falha ao processar ICMS para CST: ' . $cst);
+								}
+								
 								\Log::info('ICMS processado com sucesso para CST: ' . $cst);
 								\Log::info('Estado das variáveis DEPOIS do processarICMSPorCST: VBC=' . $VBC . ', somaICMS=' . $somaICMS . ', somaICMSDeson=' . $somaICMSDeson);
 								
@@ -1347,16 +1391,60 @@ class NFeRemessaService
 		$nfe->taginfRespTec($std);
 
 		try {
-			$nfe->montaNFe();
+			\Log::info('=== MONTANDO NFE - Iniciando processo ===');
+			$resultadoMontagem = $nfe->montaNFe();
+			\Log::info('NFe montada com sucesso. Resultado: ' . var_export($resultadoMontagem, true));
+			
+			$chave = $nfe->getChave();
+			$xml = $nfe->getXML();
+			
+			\Log::info('Chave NFe gerada: ' . $chave);
+			\Log::info('Tamanho do XML gerado: ' . strlen($xml) . ' caracteres');
+			\Log::info('Primeiros 500 caracteres do XML: ' . substr($xml, 0, 500));
+			
 			$arr = [
-				'chave' => $nfe->getChave(),
-				'xml' => $nfe->getXML(),
+				'chave' => $chave,
+				'xml' => $xml,
 				'nNf' => $stdIde->nNF
 			];
+			
+			\Log::info('=== NFE MONTADA COM SUCESSO ===');
 			return $arr;
 		} catch (\Exception $e) {
+			\Log::error('=== ERRO NA MONTAGEM DA NFE ===');
+			\Log::error('Erro: ' . $e->getMessage());
+			\Log::error('Arquivo: ' . $e->getFile() . ' - Linha: ' . $e->getLine());
+			\Log::error('Stack trace: ' . $e->getTraceAsString());
+			
+			$errosXML = $nfe->getErrors();
+			\Log::error('Erros XML da biblioteca NFePHP: ' . json_encode($errosXML, JSON_PRETTY_PRINT));
+			
+			// Log do XML parcial gerado (se houver)
+			try {
+				$xmlParcial = $nfe->getXML();
+				if (!empty($xmlParcial)) {
+					\Log::info('XML parcial gerado antes do erro: ' . substr($xmlParcial, 0, 1000));
+					
+					// Verificar especificamente por elementos ICMS vazios
+					if (strpos($xmlParcial, '<ICMS></ICMS>') !== false) {
+						\Log::error('PROBLEMA ENCONTRADO: Tag <ICMS></ICMS> vazia detectada no XML');
+					}
+					if (strpos($xmlParcial, '<ICMS/>') !== false) {
+						\Log::error('PROBLEMA ENCONTRADO: Tag <ICMS/> auto-fechada detectada no XML');
+					}
+				}
+			} catch (\Exception $xmlException) {
+				\Log::error('Não foi possível obter XML parcial: ' . $xmlException->getMessage());
+			}
+			
 			return [
-				'erros_xml' => $nfe->getErrors()
+				'erros_xml' => $errosXML,
+				'erro_exception' => $e->getMessage(),
+				'erro_completo' => [
+					'message' => $e->getMessage(),
+					'file' => $e->getFile(),
+					'line' => $e->getLine()
+				]
 			];
 		}
 	}
@@ -1665,6 +1753,19 @@ class NFeRemessaService
 	 */
 	private function processarICMSPorCST($nfe, $stdICMS, $cst)
 	{
+		\Log::info('=== PROCESSANDO ICMS PARA CST: ' . $cst . ' ===');
+		
+		// Validar parâmetros de entrada
+		if (empty($cst)) {
+			\Log::error('CST vazio no processarICMSPorCST');
+			throw new \Exception('CST não pode ser vazio');
+		}
+		
+		if (!isset($stdICMS->item) || !isset($stdICMS->orig)) {
+			\Log::error('Campos obrigatórios ausentes no stdICMS: item=' . ($stdICMS->item ?? 'NULL') . ', orig=' . ($stdICMS->orig ?? 'NULL'));
+			throw new \Exception('Campos obrigatórios item e orig devem estar definidos');
+		}
+		
 		// Criar um novo objeto específico para cada CST
 		$stdICMSEspecifico = new \stdClass();
 		
@@ -1673,14 +1774,20 @@ class NFeRemessaService
 			$stdICMSEspecifico->$key = $value;
 		}
 		
-		switch($cst) {
-			case '00':
-				// ICMS tributado integralmente
-				$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
-				$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
-				$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
-				$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
-				return $nfe->tagICMS($stdICMSEspecifico);
+		\Log::info('Dados copiados para stdICMSEspecifico: ' . json_encode($stdICMSEspecifico));
+		
+		try {
+			switch($cst) {
+				case '00':
+					// ICMS tributado integralmente
+					$stdICMSEspecifico->modBC = $stdICMS->modBC ?? 0;
+					$stdICMSEspecifico->vBC = $stdICMS->vBC ?? 0;
+					$stdICMSEspecifico->pICMS = $stdICMS->pICMS ?? 0;
+					$stdICMSEspecifico->vICMS = $stdICMS->vICMS ?? 0;
+					\Log::info('Processando ICMS00 com dados: ' . json_encode($stdICMSEspecifico));
+					$resultado = $nfe->tagICMS($stdICMSEspecifico);
+					\Log::info('ICMS00 criado com sucesso');
+					return $resultado;
 				
 			case '10':
 				// Tributada e com cobrança do ICMS por substituição tributária
@@ -1719,7 +1826,9 @@ class NFeRemessaService
 			case '41':
 			case '50':
 				// Isenta, não tributada ou diferida
-				// Para estes CSTs, devemos usar o método tagICMS() da NFePHP
+				\Log::info('Processando CST isento/não tributado: ' . $cst);
+				
+				// Criar objeto limpo apenas com campos necessários
 				$stdICMSEspecifico = new \stdClass();
 				$stdICMSEspecifico->item = $stdICMS->item;
 				$stdICMSEspecifico->orig = $stdICMS->orig;
@@ -1731,6 +1840,8 @@ class NFeRemessaService
 				
 				// Para CST 40 (isenta), incluir campos de desoneração e benefício fiscal
 				if ($cst == '40') {
+					\Log::info('=== PROCESSANDO CST 40 - ISENTA ===');
+					
 					// Calcular o valor do ICMS que seria devido (desonerado)
 					$vProd = $stdICMS->vProd ?? 0;
 					// Usar alíquota original preservada ou padrão de SC se não disponível
@@ -1738,15 +1849,19 @@ class NFeRemessaService
 					if ($pICMSEfetivo == 0) {
 						$pICMSEfetivo = 17; // Alíquota padrão SC quando não informada
 					}
-					$vICMSDesonerado = round(($vProd * $pICMSEfetivo / 100), 2);
 					
-					$stdICMSEspecifico->vICMSDeson = $vICMSDesonerado;
-					$stdICMSEspecifico->motDesICMS = $stdICMS->motDesICMS ?? 9; // 9 = Outros
-					
-					\Log::info("CST 40 - Calculando ICMS desonerado: vProd={$vProd}, pICMS={$pICMSEfetivo}%, vICMSDeson={$vICMSDesonerado}");
-					
-					// Zerar pICMS após o cálculo de desoneração
-					$stdICMSEspecifico->pICMS = 0;
+					if ($vProd > 0 && $pICMSEfetivo > 0) {
+						$vICMSDesonerado = round(($vProd * $pICMSEfetivo / 100), 2);
+						$stdICMSEspecifico->vICMSDeson = $vICMSDesonerado;
+						$stdICMSEspecifico->motDesICMS = $stdICMS->motDesICMS ?? 9; // 9 = Outros
+						
+						\Log::info("CST 40 - Calculando ICMS desonerado: vProd={$vProd}, pICMS={$pICMSEfetivo}%, vICMSDeson={$vICMSDesonerado}");
+						
+						// Retornar valor de desoneração para soma nos totalizadores
+						$stdICMS->vICMSDeson = $vICMSDesonerado;
+					} else {
+						\Log::info('CST 40 - Sem cálculo de desoneração: vProd=' . $vProd . ', pICMS=' . $pICMSEfetivo);
+					}
 					
 					// Código de benefício fiscal obrigatório para CST 40
 					$cBenefOriginal = $stdICMS->cBenef ?? null;
@@ -1777,13 +1892,33 @@ class NFeRemessaService
 					}
 					
 					\Log::info('Aplicando cBenef para CST 40: ' . $stdICMSEspecifico->cBenef);
-					
-					// Retornar valor de desoneração para soma nos totalizadores
-					$stdICMS->vICMSDeson = $vICMSDesonerado;
 				}
 				
 				\Log::info('Dados ICMS completos para CST ' . $cst . ': ' . json_encode($stdICMSEspecifico));
-				return $nfe->tagICMS($stdICMSEspecifico);
+				
+				// VALIDAÇÃO CRÍTICA: Verificar se todos os campos obrigatórios estão presentes
+				$camposObrigatorios = ['item', 'orig', 'CST'];
+				foreach ($camposObrigatorios as $campo) {
+					if (!isset($stdICMSEspecifico->$campo) || $stdICMSEspecifico->$campo === null || $stdICMSEspecifico->$campo === '') {
+						\Log::error("ERRO CRÍTICO: Campo obrigatório '{$campo}' está vazio ou ausente no stdICMSEspecifico");
+						\Log::error('Dados completos: ' . json_encode($stdICMSEspecifico));
+						throw new \Exception("Campo obrigatório '{$campo}' está vazio para CST {$cst}");
+					}
+				}
+				
+				\Log::info('VALIDAÇÃO OK: Todos os campos obrigatórios estão presentes');
+				\Log::info('Chamando nfe->tagICMS() com dados: ' . json_encode($stdICMSEspecifico));
+				
+				$resultado = $nfe->tagICMS($stdICMSEspecifico);
+				
+				if ($resultado === false || $resultado === null) {
+					\Log::error('ERRO: nfe->tagICMS() retornou valor inválido: ' . var_export($resultado, true));
+					\Log::error('Dados enviados: ' . json_encode($stdICMSEspecifico));
+					throw new \Exception('Falha ao criar tag ICMS para CST ' . $cst);
+				}
+				
+				\Log::info('ICMS para CST ' . $cst . ' criado com sucesso. Resultado: ' . var_export($resultado, true));
+				return $resultado;
 				
 			case '51':
 				// Diferimento
@@ -1839,6 +1974,11 @@ class NFeRemessaService
 				// Fallback: para CSTs não mapeados, usar o método genérico
 				\Log::warning('CST não mapeado: ' . $cst . '. Usando método genérico.');
 				return $nfe->tagICMS($stdICMSEspecifico);
+		}
+		} catch (\Exception $e) {
+			\Log::error('Erro no processamento ICMS CST ' . $cst . ': ' . $e->getMessage());
+			\Log::error('Dados ICMS: ' . json_encode($stdICMS));
+			throw new \Exception('Erro ao processar ICMS CST ' . $cst . ': ' . $e->getMessage());
 		}
 	}
 }

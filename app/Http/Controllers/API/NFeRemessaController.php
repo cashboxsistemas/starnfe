@@ -114,9 +114,35 @@ class NFeRemessaController extends Controller
                         return response()->json($resultado['error'], 403);
                     }
                 } else {
-                    \Log::error('Erro na geração XML NFe:');
-                    \Log::error('Erros XML: ' . json_encode($nfe['erros_xml']));
-                    return response()->json($nfe['erros_xml'], 401);
+                    \Log::error('=== ERRO NA GERAÇÃO DO XML NFE ===');
+                    \Log::error('Venda ID: ' . $venda->id);
+                    \Log::error('Empresa ID: ' . $request->empresa_id);
+                    \Log::error('Erros XML: ' . json_encode($nfe['erros_xml'], JSON_PRETTY_PRINT));
+                    
+                    // Log detalhes adicionais se disponíveis
+                    if (isset($nfe['erro_exception'])) {
+                        \Log::error('Exceção capturada: ' . $nfe['erro_exception']);
+                    }
+                    if (isset($nfe['erro_completo'])) {
+                        \Log::error('Erro completo: ' . json_encode($nfe['erro_completo'], JSON_PRETTY_PRINT));
+                    }
+                    
+                    // Marcar venda como rejeitada se aplicável
+                    $venda->estado_emissao = 'rejeitado';
+                    $venda->save();
+                    
+                    // Preparar resposta com detalhes do erro
+                    $erroResposta = [
+                        'erro' => true,
+                        'message' => 'Erro na geração do XML da NFe',
+                        'detalhes' => $nfe['erros_xml']
+                    ];
+                    
+                    if (isset($nfe['erro_exception'])) {
+                        $erroResposta['exception'] = $nfe['erro_exception'];
+                    }
+                    
+                    return response()->json($erroResposta, 400);
                 }
             }
         } catch (\Exception $e) {
