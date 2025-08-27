@@ -775,18 +775,30 @@ $('#btn-enviar').click(() => {
 			id: id,
 			empresa_id: empresa_id,
 		})
-		.done((success) => {
-			console.log('=== SUCESSO ===')
-			console.log('Resposta completa:', success)
-
-			swal("Sucesso", "NFe remessa emitida " + success, "success")
-			.then(() => {
-				window.open(path_url + 'nferemessa/imprimir/' + id, "_blank")
-				setTimeout(() => {
-					location.reload()
-				}, 100)
-			})
-		})
+        .done((success) => {
+            console.log('=== SUCESSO ===')
+            console.log('Resposta completa:', success)
+            // Se o retorno for objeto, exibe status e motivo
+            if (typeof success === 'object' && success.cStat == 100) {
+                swal("Sucesso", "[100] " + (success.success || 'NFe autorizada'), "success")
+                .then(() => {
+                    window.open(path_url + 'nferemessa/imprimir/' + id, "_blank")
+                    setTimeout(() => {
+                        location.reload()
+                    }, 100)
+                })
+            } else if (typeof success === 'object' && success.cStat) {
+                swal("Atenção", "[" + success.cStat + "] " + (success.error || 'NFe não autorizada'), "warning")
+            } else {
+                swal("Sucesso", "NFe remessa emitida " + success, "success")
+                .then(() => {
+                    window.open(path_url + 'nferemessa/imprimir/' + id, "_blank")
+                    setTimeout(() => {
+                        location.reload()
+                    }, 100)
+                })
+            }
+        })
 		.fail((err) => {
 			console.log('=== ERRO DETECTADO ===')
 			console.log('Status do erro:', err.status)

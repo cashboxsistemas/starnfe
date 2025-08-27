@@ -1656,7 +1656,7 @@ class NFeRemessaService
 		return $this->tools->signNFe($xml);
 	}
 
-	public function transmitir($signXml, $chave)
+	public function transmitir($signXml, $chave, $remessaId = null)
 	{
 		try {
 			$idLote = str_pad(100, 15, '0', STR_PAD_LEFT);
@@ -1683,10 +1683,38 @@ class NFeRemessaService
 					// Resposta já vem com o protocolo
 					$xml = Complements::toAuthorize($signXml, $resp);
 					file_put_contents(public_path('xml_nfe/') . $chave . '.xml', $xml);
-					return [
-						'erro' => 0,
-						'success' => 'Autorizada sincronamente'
-					];
+					// Verifica se foi autorizado (cStat 100)
+					$stdResp = $st->toStd($resp);
+					if (isset($stdResp->protNFe->infProt->cStat)) {
+						$cStat = $stdResp->protNFe->infProt->cStat;
+						if ($cStat == '100') {
+							// Atualiza estado_emissao da RemessaNfe
+							if ($remessaId) {
+								$remessa = \App\Models\RemessaNfe::find($remessaId);
+								if ($remessa) {
+									$remessa->estado_emissao = 'aprovado';
+									$remessa->save();
+								}
+							}
+							return [
+								'erro' => 0,
+								'success' => $stdResp->protNFe->infProt->xMotivo ?? 'Autorizada sincronamente',
+								'cStat' => 100
+							];
+						} else {
+							return [
+								'erro' => 1,
+								'error' => $stdResp->protNFe->infProt->xMotivo ?? 'NFe não autorizada',
+								'cStat' => $cStat
+							];
+						}
+					} else {
+						return [
+							'erro' => 1,
+							'error' => 'NFe não autorizada',
+							'cStat' => null
+						];
+					}
 				} catch (\Exception $e) {
 					return [
 						'erro' => 1,

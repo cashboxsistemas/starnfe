@@ -15,14 +15,26 @@ $('#btn-enviar').click(() => {
 	})
 	.done((success) => {
 		console.log(success)
-
-		swal("Sucesso", "NFe emitida " + success, "success")
-		.then(() => {
-			window.open(path_url+'compras-danfe/'+id, "_blank")
-			setTimeout(() => {
-				location.reload()
-			}, 100)
-		})
+		// Se o retorno for objeto, exibe status e motivo
+		if (typeof success === 'object' && success.cStat == 100) {
+			swal("Sucesso", "[100] " + (success.success || 'NFe autorizada'), "success")
+			.then(() => {
+				window.open(path_url+'compras-danfe/'+id, "_blank")
+				setTimeout(() => {
+					location.reload()
+				}, 100)
+			})
+		} else if (typeof success === 'object' && success.cStat) {
+			swal("Atenção", "[" + success.cStat + "] " + (success.error || 'NFe não autorizada'), "warning")
+		} else {
+			swal("Sucesso", "NFe emitida " + success, "success")
+			.then(() => {
+				window.open(path_url+'compras-danfe/'+id, "_blank")
+				setTimeout(() => {
+					location.reload()
+				}, 100)
+			})
+		}
 	})
 	.fail((err) => {
 		console.log(err)
